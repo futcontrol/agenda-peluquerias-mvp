@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/browser";
 
@@ -266,49 +266,77 @@ type UndoState = null | {
   };
 };
 
+/**
+ * ✅ Next.js build fix:
+ * useSearchParams() debe estar dentro de un componente envuelto en <Suspense>.
+ * - AgendaPage: wrapper con <Suspense>
+ * - AgendaPageInner: usa useSearchParams y pasa `initialDate` a la agenda real
+ */
+
+function AgendaPageInner() {
+  const searchParams = useSearchParams();
+  const urlDate = searchParams.get("date") || toYYYYMMDD(new Date());
+  return <AgendaInner initialDate={urlDate} />;
+}
+
 export default function AgendaPage() {
+  return (
+    <Suspense fallback={<div style={{ minHeight: "100vh", padding: 18, background: "rgba(9,10,12,1)", color: "rgba(255,255,255,0.92)" }}>Cargando agenda…</div>}>
+      <AgendaPageInner />
+    </Suspense>
+  );
+}
+
+/**
+ * ✅ Componente real de la agenda (todo lo que ya tenías),
+ * solo que ahora recibe initialDate y NO llama a useSearchParams.
+ */
+function AgendaInner({ initialDate }: { initialDate: string }) {
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const nameInputRef = useRef<HTMLInputElement | null>(null);
 
-  // ✅ día inicial: si viene ?date=YYYY-MM-DD lo usamos, si no hoy
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    const urlDate = searchParams.get("date");
-    return urlDate || toYYYYMMDD(new Date());
-  });
+  // ✅ día inicial: viene por prop (desde ?date=YYYY-MM-DD), si no hoy
+  const [selectedDate, setSelectedDate] = useState<string>(() => initialDate || toYYYYMMDD(new Date()));
 
-  // ✅ si cambias desde /agenda/month, sincronizamos aquí
+  // ✅ si cambia la URL (navegación interna), sincroniza selectedDate desde window.location
   useEffect(() => {
-    const urlDate = searchParams.get("date");
-    if (urlDate && urlDate !== selectedDate) setSelectedDate(urlDate);
+    // Mantiene el comportamiento previo de “si vienes de /agenda/month y trae date”
+    const readFromUrl = () => {
+      const params = new URLSearchParams(window.location.search);
+      const urlDate = params.get("date");
+      if (urlDate && urlDate !== selectedDate) setSelectedDate(urlDate);
+    };
+
+    readFromUrl();
+    window.addEventListener("popstate", readFromUrl);
+    return () => window.removeEventListener("popstate", readFromUrl);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
-  useEffect(() => {
-  const t = setInterval(() => {
-    loadDay(selectedDate);
-  }, 20000);
+  }, [selectedDate]);
 
-  return () => clearInterval(t);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [selectedDate]);
-useEffect(() => {
-  const onFocus = () => loadDay(selectedDate);
-  window.addEventListener("focus", onFocus);
-  return () => window.removeEventListener("focus", onFocus);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [selectedDate]);
+  useEffect(() => {
+    const t = setInterval(() => {
+      loadDay(selectedDate);
+    }, 20000);
+
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate]);
+
+  useEffect(() => {
+    const onFocus = () => loadDay(selectedDate);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate]);
 
   const selectedDateObj = useMemo(() => new Date(`${selectedDate}T00:00:00`), [selectedDate]);
 
   // ✅ peluqueros (persisten en localStorage)
   const [stylists, setStylists] = useState<Stylist[]>(() => {
     try {
-      const raw =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem(STORAGE_KEY_STYLISTS)
-          : null;
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY_STYLISTS) : null;
       if (!raw) return DEFAULT_STYLISTS;
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) return parsed as Stylist[];
@@ -544,9 +572,14 @@ useEffect(() => {
     arrival.setHours(H, M, 0, 0);
 
     const prev = items;
-    setItems((cur) => cur.map((x) => (x.id === id ? { ...x, arrival_at: arrival.toISOString() } : x)));
+    setItems((cur) =>
+      cur.map((x) => (x.id === id ? { ...x, arrival_at: arrival.toISOString() } : x))
+    );
 
-    const { error } = await supabase.from("appointments").update({ arrival_at: arrival.toISOString() }).eq("id", id);
+    const { error } = await supabase
+      .from("appointments")
+      .update({ arrival_at: arrival.toISOString() })
+      .eq("id", id);
 
     if (error) {
       setItems(prev);
@@ -570,7 +603,9 @@ useEffect(() => {
 
     if (error) {
       setItems((cur) =>
-        [...cur, appt].sort((a, b) => new Date(a.arrival_at).getTime() - new Date(b.arrival_at).getTime())
+        [...cur, appt].sort(
+          (a, b) => new Date(a.arrival_at).getTime() - new Date(b.arrival_at).getTime()
+        )
       );
       setError(error.message);
       return;
@@ -681,7 +716,11 @@ useEffect(() => {
     outline: "none",
   };
 
-  const cardTitle: React.CSSProperties = { fontSize: 20, fontWeight: 980, textTransform: "capitalize" };
+  const cardTitle: React.CSSProperties = {
+    fontSize: 20,
+    fontWeight: 980,
+    textTransform: "capitalize",
+  };
   const subText: React.CSSProperties = { fontSize: 12, opacity: 0.78, marginTop: 4, fontWeight: 850 };
 
   if (loading) {
@@ -751,7 +790,15 @@ useEffect(() => {
       {/* CREAR + INFO */}
       <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
         <div style={{ ...surface }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
             <div>
               <div style={cardTitle}>Nueva cita</div>
               <div style={subText}>Enter crea · Hora libre (HH:MM)</div>
@@ -870,7 +917,7 @@ useEffect(() => {
         ) : null}
       </div>
 
-      {/* BOARD */}
+            {/* BOARD */}
       <div
         style={{
           marginTop: 12,
@@ -1062,9 +1109,15 @@ useEffect(() => {
 
                       {/* Acciones */}
                       <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 72 }}>
-                        {appt.phase !== "por_llegar" ? <SmallButton onClick={() => movePhase(appt.id, "por_llegar")}>↩</SmallButton> : null}
-                        {appt.phase !== "en_proceso" ? <SmallButton onClick={() => movePhase(appt.id, "en_proceso")}>▶</SmallButton> : null}
-                        {appt.phase !== "terminado" ? <SmallButton onClick={() => movePhase(appt.id, "terminado")}>✓</SmallButton> : null}
+                        {appt.phase !== "por_llegar" ? (
+                          <SmallButton onClick={() => movePhase(appt.id, "por_llegar")}>↩</SmallButton>
+                        ) : null}
+                        {appt.phase !== "en_proceso" ? (
+                          <SmallButton onClick={() => movePhase(appt.id, "en_proceso")}>▶</SmallButton>
+                        ) : null}
+                        {appt.phase !== "terminado" ? (
+                          <SmallButton onClick={() => movePhase(appt.id, "terminado")}>✓</SmallButton>
+                        ) : null}
 
                         <SmallButton danger onClick={() => deleteAppointment(appt)}>
                           Borrar
@@ -1198,7 +1251,8 @@ useEffect(() => {
             </div>
 
             <div style={{ marginTop: 12, fontSize: 12, opacity: 0.75, fontWeight: 900 }}>
-              Nota: las citas ya guardadas mantienen su color/nombre guardado. Si quieres que se “actualicen” todas, lo hacemos luego con un script (no hace falta para el MVP).
+              Nota: las citas ya guardadas mantienen su color/nombre guardado. Si quieres que se “actualicen” todas, lo
+              hacemos luego con un script (no hace falta para el MVP).
             </div>
           </div>
         </div>
