@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/browser";
 
 function pad(n: number) {
@@ -21,17 +21,15 @@ function startOfMonth(d: Date) {
 
 function endOfMonth(d: Date) {
   const x = new Date(d);
-  // último día del mes: ir al día 0 del mes siguiente
   x.setMonth(x.getMonth() + 1, 0);
   x.setHours(23, 59, 59, 999);
   return x;
 }
 
 function startOfCalendarGrid(month: Date) {
-  // Grid empezando en LUNES (formato libreta)
   const first = startOfMonth(month);
-  const day = first.getDay(); // 0 dom .. 6 sáb
-  const mondayIndex = (day + 6) % 7; // 0 lunes .. 6 domingo
+  const day = first.getDay();
+  const mondayIndex = (day + 6) % 7;
   const start = new Date(first);
   start.setDate(first.getDate() - mondayIndex);
   start.setHours(0, 0, 0, 0);
@@ -49,21 +47,27 @@ function sameMonth(a: Date, b: Date) {
 }
 
 function badgeForCount(n: number) {
-  if (n >= 12) return { bg: "rgba(239,68,68,0.22)", border: "rgba(239,68,68,0.35)" }; // rojo suave
-  if (n >= 7) return { bg: "rgba(245,158,11,0.22)", border: "rgba(245,158,11,0.35)" }; // naranja
-  if (n >= 3) return { bg: "rgba(59,130,246,0.18)", border: "rgba(59,130,246,0.32)" }; // azul
-  return { bg: "rgba(255,255,255,0.08)", border: "rgba(255,255,255,0.14)" }; // neutro
+  if (n >= 12) return { bg: "rgba(239,68,68,0.22)", border: "rgba(239,68,68,0.35)" };
+  if (n >= 7) return { bg: "rgba(245,158,11,0.22)", border: "rgba(245,158,11,0.35)" };
+  if (n >= 3) return { bg: "rgba(59,130,246,0.18)", border: "rgba(59,130,246,0.32)" };
+  return { bg: "rgba(255,255,255,0.08)", border: "rgba(255,255,255,0.14)" };
 }
 
-export default function AgendaMonthPage() {
+/**
+ * ✅ build-safe:
+ * useSearchParams() dentro de Suspense
+ */
+function AgendaMonthInner() {
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
+  const sp = useSearchParams();
 
   const [month, setMonth] = useState<Date>(() => {
-    const now = new Date();
-    now.setDate(1);
-    now.setHours(0, 0, 0, 0);
-    return now;
+    const q = sp.get("date"); // YYYY-MM-DD
+    const base = q ? new Date(`${q}T00:00:00`) : new Date();
+    base.setDate(1);
+    base.setHours(0, 0, 0, 0);
+    return base;
   });
 
   const [counts, setCounts] = useState<Record<string, number>>({});
@@ -77,7 +81,6 @@ export default function AgendaMonthPage() {
   const gridStart = useMemo(() => startOfCalendarGrid(month), [month]);
 
   const days = useMemo(() => {
-    // 6 filas x 7 columnas = 42 días (grid tipo calendario)
     return Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
   }, [gridStart]);
 
@@ -89,7 +92,6 @@ export default function AgendaMonthPage() {
       const from = startOfMonth(month).toISOString();
       const to = endOfMonth(month).toISOString();
 
-      // Solo necesitamos arrival_at para contar por día
       const { data, error } = await supabase
         .from("appointments")
         .select("arrival_at")
@@ -152,9 +154,11 @@ export default function AgendaMonthPage() {
 
   const weekDays = ["L", "M", "X", "J", "V", "S", "D"];
 
+  // ✅ “día representativo” del mes para links
+  const monthAnchorDate = useMemo(() => toYYYYMMDD(startOfMonth(month)), [month]);
+
   return (
     <div style={containerStyle}>
-      {/* ✅ CSS: modo compacto SOLO en móvil (simple y agradable) */}
       <style>{`
         @media (max-width: 520px) {
           .monthHeader { padding: 12px !important; }
@@ -187,16 +191,9 @@ export default function AgendaMonthPage() {
             min-width: 28px !important;
           }
 
-          /* ✅ Clave para quitar saturación: si no hay citas, no mostramos el “0” */
           .badgeZero { display: none !important; }
-
-          /* Quitamos texto “Libre / X citas” en móvil */
           .dayText { display: none !important; }
-
-          /* “Hoy” más sutil */
           .todayTag { font-size: 10px !important; margin-top: 4px !important; opacity: 0.85 !important; }
-
-          /* Leyenda fuera en móvil (satura) */
           .legend { display: none !important; }
         }
       `}</style>
@@ -211,7 +208,6 @@ export default function AgendaMonthPage() {
           justifyContent: "space-between",
           gap: 10,
           flexWrap: "wrap",
-
           position: "sticky",
           top: 0,
           zIndex: 20,
@@ -224,7 +220,7 @@ export default function AgendaMonthPage() {
             {monthLabel}
           </div>
           <div className="monthSubtitle" style={{ fontSize: 12, opacity: 0.78, marginTop: 4 }}>
-            Pulsa un día para abrir la vista diaria con su ocupación
+            Pulsa un día para abrir “Dar hora”
           </div>
         </div>
 
@@ -234,6 +230,8 @@ export default function AgendaMonthPage() {
             onClick={() => {
               const x = new Date(month);
               x.setMonth(x.getMonth() - 1);
+              x.setDate(1);
+              x.setHours(0, 0, 0, 0);
               setMonth(x);
             }}
           >
@@ -257,17 +255,19 @@ export default function AgendaMonthPage() {
             onClick={() => {
               const x = new Date(month);
               x.setMonth(x.getMonth() + 1);
+              x.setDate(1);
+              x.setHours(0, 0, 0, 0);
               setMonth(x);
             }}
           >
             Mes ▶
           </button>
 
-          <button style={btnPrimary} onClick={() => router.push(`/agenda?date=${toYYYYMMDD(new Date())}`)}>
+          <button style={btnPrimary} onClick={() => router.push(`/agenda/schedule?date=${toYYYYMMDD(new Date())}`)}>
             Ir a hoy
           </button>
 
-          <button style={btnStyle} onClick={() => router.push("/agenda")}>
+          <button style={btnStyle} onClick={() => router.push(`/agenda?date=${monthAnchorDate}`)}>
             Vista diaria
           </button>
         </div>
@@ -280,9 +280,7 @@ export default function AgendaMonthPage() {
         ) : error ? (
           <div style={{ fontSize: 13, fontWeight: 900, color: "rgba(255,120,120,0.95)" }}>{error}</div>
         ) : (
-          <div style={{ fontSize: 13, opacity: 0.85, fontWeight: 900 }}>
-            Ocupación por día: número de citas guardadas en Supabase
-          </div>
+          <div style={{ fontSize: 13, opacity: 0.85, fontWeight: 900 }}>Ocupación por día: número de citas guardadas</div>
         )}
       </div>
 
@@ -297,9 +295,8 @@ export default function AgendaMonthPage() {
           WebkitOverflowScrolling: "touch",
         }}
       >
-        {/* Week headers */}
         <div className="grid" style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0,1fr))", gap: 8 }}>
-          {weekDays.map((w) => (
+          {["L", "M", "X", "J", "V", "S", "D"].map((w) => (
             <div
               key={w}
               className="weekHdr"
@@ -312,15 +309,7 @@ export default function AgendaMonthPage() {
 
         <div style={{ height: 10 }} />
 
-        {/* Grid days */}
-        <div
-          className="grid"
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(7, minmax(0,1fr))",
-            gap: 8,
-          }}
-        >
+        <div className="grid" style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0,1fr))", gap: 8 }}>
           {days.map((d) => {
             const key = toYYYYMMDD(d);
             const n = counts[key] || 0;
@@ -332,7 +321,7 @@ export default function AgendaMonthPage() {
             return (
               <button
                 key={key}
-                onClick={() => router.push(`/agenda?date=${key}`)}
+                onClick={() => router.push(`/agenda/schedule?date=${key}`)}
                 className="dayCell"
                 style={{
                   textAlign: "left",
@@ -363,7 +352,6 @@ export default function AgendaMonthPage() {
                     {d.getDate()}
                   </div>
 
-                  {/* ✅ En móvil: si n=0, badge oculto (quita mucha saturación) */}
                   <div
                     className={`badge ${n === 0 ? "badgeZero" : ""}`}
                     style={{
@@ -397,12 +385,26 @@ export default function AgendaMonthPage() {
           })}
         </div>
 
-        {/* Legend */}
         <div className="legend" style={{ marginTop: 14, fontSize: 12, opacity: 0.75, fontWeight: 900 }}>
-          Colores ocupación: <span style={{ opacity: 0.85 }}>3+</span> (medio) ·{" "}
-          <span style={{ opacity: 0.85 }}>7+</span> (alto) · <span style={{ opacity: 0.85 }}>12+</span> (muy alto)
+          Colores ocupación: <span style={{ opacity: 0.85 }}>3+</span> · <span style={{ opacity: 0.85 }}>7+</span> ·{" "}
+          <span style={{ opacity: 0.85 }}>12+</span>
         </div>
       </div>
     </div>
   );
 }
+
+export default function AgendaMonthPage() {
+  return (
+    <Suspense
+      fallback={
+        <div style={{ minHeight: "100vh", padding: 18, background: "rgba(10,10,12,1)", color: "rgba(255,255,255,0.92)" }}>
+          Cargando mes…
+        </div>
+      }
+    >
+      <AgendaMonthInner />
+    </Suspense>
+  );
+}
+
