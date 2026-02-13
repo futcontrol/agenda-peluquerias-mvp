@@ -1,5 +1,8 @@
 "use client";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/browser";
@@ -19,10 +22,11 @@ function startOfMonth(d: Date) {
   return x;
 }
 
-function endOfMonth(d: Date) {
+function startOfNextMonth(d: Date) {
   const x = new Date(d);
-  x.setMonth(x.getMonth() + 1, 0);
-  x.setHours(23, 59, 59, 999);
+  x.setDate(1);
+  x.setMonth(x.getMonth() + 1);
+  x.setHours(0, 0, 0, 0);
   return x;
 }
 
@@ -89,14 +93,15 @@ function AgendaMonthInner() {
       setLoading(true);
       setError(null);
 
+      // ✅ filtro robusto: [monthStart, nextMonthStart)
       const from = startOfMonth(month).toISOString();
-      const to = endOfMonth(month).toISOString();
+      const to = startOfNextMonth(month).toISOString();
 
       const { data, error } = await supabase
         .from("appointments")
         .select("arrival_at")
         .gte("arrival_at", from)
-        .lte("arrival_at", to);
+        .lt("arrival_at", to);
 
       if (error) {
         setError(error.message);
@@ -151,8 +156,6 @@ function AgendaMonthInner() {
     ...btnStyle,
     background: "rgba(255,255,255,0.12)",
   };
-
-  const weekDays = ["L", "M", "X", "J", "V", "S", "D"];
 
   // ✅ “día representativo” del mes para links
   const monthAnchorDate = useMemo(() => toYYYYMMDD(startOfMonth(month)), [month]);
@@ -280,7 +283,9 @@ function AgendaMonthInner() {
         ) : error ? (
           <div style={{ fontSize: 13, fontWeight: 900, color: "rgba(255,120,120,0.95)" }}>{error}</div>
         ) : (
-          <div style={{ fontSize: 13, opacity: 0.85, fontWeight: 900 }}>Ocupación por día: número de citas guardadas</div>
+          <div style={{ fontSize: 13, opacity: 0.85, fontWeight: 900 }}>
+            Ocupación por día: número de citas guardadas
+          </div>
         )}
       </div>
 
@@ -407,4 +412,3 @@ export default function AgendaMonthPage() {
     </Suspense>
   );
 }
-
